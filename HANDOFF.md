@@ -4,7 +4,7 @@
 
 ## Current Status
 
-- Current phase: Phase 2 complete — 14/14 tests passing
+- Current phase: Phase 3 complete — 17/17 tests passing, benchmark verified
 - Last stable commit: None yet (no git repo initialized)
 - Last agent/tool: Claude Code (claude-sonnet-4-6)
 - Last updated: 2026-06-28
@@ -43,9 +43,27 @@ cargo run -p bench  # Phase 1 throughput baseline (1M msgs)
 
 ## Test / Verification Status
 
-- Passing: 14/14 (11 bus, 3 message-core)
+- Passing: 17/17 (3 bench, 11 bus, 3 message-core)
 - Failing: 0
-- Not run: Phase 3+ tests
+- Not run: Phase 4+ tests
+
+## Phase 3 Benchmark Results (crossbeam-channel baseline, release, Windows 11)
+
+Rate: 20,000 msg/s | 100,000 msgs | 0 dropped
+
+| Percentile | Latency |
+|------------|---------|
+| min        | 304 ns  |
+| mean       | 46,675 ns |
+| p50        | 7,939 ns |
+| p95        | 174,079 ns |
+| p99        | 1,146,879 ns |
+| p99.9      | 1,977,343 ns |
+| max        | 2,437,119 ns |
+
+Throughput: 0.019 Mmsg/s (rate-limited by open-loop 20k msg/s target).
+Phase 4 ring buffer will push this rate to 1M+ msg/s and re-run for honest comparison.
+Full results in `bench_results.json`.
 
 ## Known Issues
 
@@ -55,7 +73,7 @@ cargo run -p bench  # Phase 1 throughput baseline (1M msgs)
 
 1. Install Rust (`rustup-init.exe`).
 2. Run `cargo test` — expect 8 passing tests.
-3. Begin Phase 3: `quanta` timestamps, `hdrhistogram` latency distribution, throughput metrics, JSON export.
+3. Begin Phase 4: SPSC ring buffer, core pinning, honest benchmark comparison vs Phase 3 crossbeam baseline.
 
 ## Decisions Locked (do not re-litigate without updating this file)
 

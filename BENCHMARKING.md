@@ -91,6 +91,33 @@ yield as little as ~1.06x, while batching with registered buffers can
 reach ~2–2.5x, and some workloads see no gain or a regression. Report
 which configuration was tested and don't generalize beyond it.
 
+## Phase 3 Decision: Coordinated Omission Handling
+
+**Decision:** Both strategies from the TASKS checklist are used together.
+
+1. **Open-loop constant-arrival-rate generator** — the publisher spins on
+   `quanta::Clock::raw()` and sends each message at its *intended* time
+   (`start + i * interval_ns`), independent of whether the subscriber has
+   drained. This ensures the latency measurement includes any time the
+   message spent waiting in the queue because the subscriber was behind.
+
+2. **`hdrhistogram::Histogram::record_corrected(value, interval_ns)`** — on
+   the subscriber side, each recorded value is corrected using HDR's built-in
+   coordinated-omission fill. If a latency of 5 ms is observed at a 5 µs
+   interval, `record_corrected` backfills 999 synthetic samples at every
+   interval up to 5 ms. This produces the distribution that *would* have been
+   seen had every message been measured, even under sustained backlog.
+
+Using both provides defense-in-depth: the open-loop generator prevents the
+artificial latency deflation caused by a closed-loop sender, and
+`record_corrected` catches any residual omission from OS scheduling jitter on
+the publisher thread.
+
+**Rationale for not using `criterion`:** Criterion's default closed-loop
+iteration model and limited HDR support make it unsuitable for capturing
+end-to-end latency distributions. It is reserved for per-operation
+microbenchmarks (e.g., cost of a single ring buffer enqueue) in Phase 4.
+
 ## What Goes in the README vs. Here
 
 The README shows the headline results and links here. This file is the
