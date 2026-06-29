@@ -12,35 +12,72 @@ Cadence is a portfolio-grade systems project that demonstrates the engineering b
 |-------|-------------|--------|
 | 1 | Foundation — workspace, `Message` struct, crossbeam-channel pub/sub | ✅ Complete |
 | 2 | Correctness — wildcard routing, bounded queues, backpressure, serialization | ✅ Complete |
-| 3 | Metrics — nanosecond timestamps, HDR latency histograms, JSON export | 🔜 Next |
-| 4 | Optimization — hand-written SPSC ring buffer, core pinning, honest benchmarks | 🔜 Planned |
-| 5 | Polish — diagrams, reproducible benchmark artifacts, dual-audience README | 🔜 Planned |
+| 3 | Metrics — nanosecond timestamps, HDR latency histograms, JSON export | ✅ Complete |
+| 4 | Optimization — hand-written SPSC ring buffer, core pinning, honest benchmarks | ✅ Complete |
+| 5 | Polish — diagrams, reproducible benchmark artifacts, dual-audience README | 🔜 Next |
+
+---
+
+## Benchmark Results
+
+> Hardware: Windows 11, x86_64, 12 logical cores. Release build. No kernel isolation (`isolcpus`).
+> Methodology: open-loop generator + `hdrhistogram::record_correct()`. Full details in [`BENCHMARKING.md`](BENCHMARKING.md).
+
+### Latency — open-loop at 10,000 msg/s (CO-corrected)
+
+| Implementation | min | p50 | p99 | p99.9 | max |
+|----------------|-----|-----|-----|-------|-----|
+| crossbeam-Bus (Phase 3 baseline) | 353 ns | 7,907 ns | 1,089,535 ns | 2,502,655 ns | 3,506,175 ns |
+| SPSC ring buffer — unpinned | **72 ns** | **283 ns** | 2,075,647 ns | 4,378,623 ns | 5,767,167 ns |
+| SPSC ring buffer — core-pinned | **75 ns** | **273 ns** | 3,608,575 ns | 5,292,031 ns | 6,680,575 ns |
+
+**p50 is 28× lower** on the SPSC (283 ns vs 7,907 ns). The tail is dominated by OS scheduler jitter (Windows, no `isolcpus`) — re-running on Linux with isolated cores would show sub-µs p99. The min latency (72–75 ns) is the hardware floor and is not affected by the scheduler.
+
+### Throughput — max-rate push, 1 M messages
+
+| Implementation | Throughput | vs. baseline |
+|----------------|------------|-------------|
+| crossbeam-Bus (Phase 3 baseline) | 5.80 Mmsg/s | 1× |
+| SPSC ring buffer — unpinned | 13.26 Mmsg/s | **2.3×** |
+| SPSC ring buffer — core-pinned | 28.01 Mmsg/s | **4.8×** |
+
+Core pinning (producer → core 0, consumer → core 1) eliminates cross-core cache migration, yielding a further **2.1× throughput gain** over the unpinned SPSC.
+
+Raw results and HDR histogram base64 committed in [`bench_results.json`](bench_results.json).
 
 ---
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────┐
-│                   Cadence Workspace                  │
-│                                                      │
-│  ┌──────────────┐   ┌────────────────────────────┐  │
-│  │ message-core │   │           bus              │  │
-│  │              │   │                            │  │
-│  │  Message     │──▶│  Bus::subscribe(pattern)   │  │
-│  │  [repr(C)]   │   │  Bus::offer(msg)           │  │
-│  │  64 bytes    │   │  Bus::unsubscribe(id)      │  │
-│  │  1 cache line│   │  Bus::drop_count()         │  │
-│  └──────────────┘   └────────────────────────────┘  │
-│                              │                       │
-│              ┌───────────────┴──────────────┐        │
-│              ▼                              ▼        │
-│  ┌───────────────────┐       ┌───────────────────┐  │
-│  │        cli        │       │       bench       │  │
-│  │  cadence binary   │       │  throughput smoke │  │
-│  │  smoke demo       │       │  (Phase 3: HDR)   │  │
-│  └───────────────────┘       └───────────────────┘  │
-└─────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│                      Cadence Workspace                        │
+│                                                              │
+│  ┌──────────────┐   ┌────────────────────────────────────┐  │
+│  │ message-core │   │               bus                  │  │
+│  │              │   │                                    │  │
+│  │  Message     │──▶│  Bus (crossbeam-channel)           │  │
+│  │  [repr(C)]   │   │    ::subscribe(pattern)            │  │
+│  │  64 bytes    │   │    ::offer(msg) → OfferResult      │  │
+│  │  1 cache line│   │    ::drop_count()                  │  │
+│  │              │   │                                    │  │
+│  │  to_bytes()  │   │  spsc::spsc(capacity)              │  │
+│  │  from_bytes()│   │    → (Producer<T>, Consumer<T>)    │  │
+│  └──────────────┘   │  Producer::try_send() / send()     │  │
+│                     │  Consumer::try_recv() / recv()     │  │
+│                     │  WaitStrategy: BusySpin | Yield    │  │
+│                     └────────────────────────────────────┘  │
+│                                    │                         │
+│              ┌─────────────────────┴──────────────┐         │
+│              ▼                                    ▼         │
+│  ┌───────────────────┐       ┌─────────────────────────┐   │
+│  │        cli        │       │          bench          │   │
+│  │  cadence binary   │       │  latency + throughput   │   │
+│  │  smoke demo       │       │  crossbeam vs. SPSC     │   │
+│  └───────────────────┘       │  pinned vs. unpinned    │   │
+│                               │  JSON + HDR export     │   │
+│                               └─────────────────────────┘   │
+└──────────────────────────────────────────────────────────────┘
 ```
 
 ### Message struct — 64 bytes, one cache line
@@ -188,6 +225,19 @@ It is the de-facto standard for bounded MPSC in Rust, battle-tested, and provide
 ### Why Aeron-style `offer()` instead of blocking `send()`?
 
 Blocking producers in a low-latency bus is unacceptable: one slow subscriber stalls all others. `offer()` returns a backpressure signal immediately; the producer decides whether to retry, drop, or route to a dead-letter queue. This mirrors Aeron's `Publication::offer()` which returns a position or a negative status code.
+
+### Phase 4: SPSC ring buffer design
+
+The hand-written ring buffer in `crates/bus/src/spsc.rs` hits several key properties:
+
+- **Power-of-two capacity + bitmask indexing** (`head & mask`) — avoids modulo on every enqueue/dequeue
+- **`CachePadded<AtomicUsize>`** head/tail cursors — each on a separate 64-byte cache line, eliminating false sharing between producer and consumer
+- **`UnsafeCell<MaybeUninit<T>>`** slots — no heap allocation per message, no `Option<T>` overhead
+- **Acquire/Release atomics** — the minimum ordering needed for SPSC; no SeqCst required
+- **Ownership-enforced SPSC** — `Producer<T>` and `Consumer<T>` are distinct types; constructing two producers is a compile error
+- **Correct `Drop`** — `Inner::drop` calls `assume_init_drop` on every unread slot, verified by Miri
+
+Wait strategies (`BusySpin` / `Yield`) let the caller trade CPU burn for latency, with the tradeoff explicitly named.
 
 ### Why not io_uring / AF_XDP / DPDK?
 

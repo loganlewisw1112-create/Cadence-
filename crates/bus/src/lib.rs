@@ -1,3 +1,6 @@
+pub mod spsc;
+pub use spsc::{spsc, Consumer, Producer, WaitStrategy};
+
 use crossbeam_channel::{bounded, Receiver, Sender, TrySendError};
 use message_core::Message;
 use std::collections::HashMap;

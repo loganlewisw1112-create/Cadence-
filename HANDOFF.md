@@ -4,7 +4,7 @@
 
 ## Current Status
 
-- Current phase: Phase 3 complete — 17/17 tests passing, benchmark verified
+- Current phase: Phase 4 complete — 26/26 tests passing, benchmark verified
 - Last stable commit: None yet (no git repo initialized)
 - Last agent/tool: Claude Code (claude-sonnet-4-6)
 - Last updated: 2026-06-28
@@ -43,7 +43,7 @@ cargo run -p bench  # Phase 1 throughput baseline (1M msgs)
 
 ## Test / Verification Status
 
-- Passing: 17/17 (3 bench, 11 bus, 3 message-core)
+- Passing: 26/26 (3 bench, 17 bus [incl. 6 spsc], 3 message-core)
 - Failing: 0
 - Not run: Phase 4+ tests
 
@@ -73,7 +73,27 @@ Full results in `bench_results.json`.
 
 1. Install Rust (`rustup-init.exe`).
 2. Run `cargo test` — expect 8 passing tests.
-3. Begin Phase 4: SPSC ring buffer, core pinning, honest benchmark comparison vs Phase 3 crossbeam baseline.
+3. Begin Phase 5: architecture diagram, benchmark screenshots, reproducible commands, limitations section, dual-audience README pass.
+
+## Phase 4 Benchmark Results (Windows 11, x86_64, 12 cores, release)
+
+### Latency — open-loop 10k msg/s, CO-corrected
+
+| Implementation | min | p50 | p99 | p99.9 | max |
+|----------------|-----|-----|-----|-------|-----|
+| crossbeam-Bus | 353 ns | 7,907 ns | 1,089,535 ns | 2,502,655 ns | 3,506,175 ns |
+| SPSC unpinned | 72 ns | 283 ns | 2,075,647 ns | 4,378,623 ns | 5,767,167 ns |
+| SPSC pinned | 75 ns | 273 ns | 3,608,575 ns | 5,292,031 ns | 6,680,575 ns |
+
+p50 is 28× lower on SPSC (283 ns vs 7,907 ns). Tail dominated by OS scheduler jitter (Windows, no isolcpus).
+
+### Throughput — max-rate, 1M messages
+
+| Implementation | Mmsg/s |
+|----------------|--------|
+| crossbeam-Bus | 5.80 |
+| SPSC unpinned | 13.26 (2.3×) |
+| SPSC pinned | 28.01 (4.8×) |
 
 ## Decisions Locked (do not re-litigate without updating this file)
 
