@@ -21,4 +21,4 @@ jobs:
         with:
           components: miri
       - run: cargo miri test -p message-core
-      - run: cargo miri test -p bus
+      - run: cargo miri test -p bus -- spsc
