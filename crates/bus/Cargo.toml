@@ -1,0 +1,10 @@
+[package]
+name = "bus"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+message-core = { path = "../message-core" }
+crossbeam-channel = "0.5"
+
+[dev-dependencies]

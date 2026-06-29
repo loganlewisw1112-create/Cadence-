@@ -1,0 +1,12 @@
+[package]
+name = "cli"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "cadence"
+path = "src/main.rs"
+
+[dependencies]
+bus = { path = "../bus" }
+message-core = { path = "../message-core" }
