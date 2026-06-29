@@ -4,7 +4,7 @@
 
 ## Current Status
 
-- Current phase: Phase 5 complete — 27/27 tests passing, project portfolio-complete
+- Current phase: Phase 4b + 5 complete — 28/28 tests passing, fully portfolio-complete
 - Last stable commit: None yet (no git repo initialized)
 - Last agent/tool: Claude Code (claude-sonnet-4-6)
 - Last updated: 2026-06-28

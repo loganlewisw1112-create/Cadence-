@@ -1,0 +1,47 @@
+[
+  {
+    "writer": "std-BufWriter",
+    "batch_size": 1,
+    "msg_count": 500000,
+    "elapsed_ms": 3526,
+    "throughput_mmsg_s": 0.14178899772391795,
+    "throughput_mb_s": 8.654113630610226,
+    "platform_note": "non-linux — io_uring not available; std baseline only"
+  },
+  {
+    "writer": "std-BufWriter",
+    "batch_size": 8,
+    "msg_count": 500000,
+    "elapsed_ms": 1222,
+    "throughput_mmsg_s": 0.4088782849485852,
+    "throughput_mb_s": 24.95595000906892,
+    "platform_note": "non-linux — io_uring not available; std baseline only"
+  },
+  {
+    "writer": "std-BufWriter",
+    "batch_size": 64,
+    "msg_count": 500032,
+    "elapsed_ms": 1450,
+    "throughput_mmsg_s": 0.34481626744555216,
+    "throughput_mb_s": 21.045914761081065,
+    "platform_note": "non-linux — io_uring not available; std baseline only"
+  },
+  {
+    "writer": "std-BufWriter",
+    "batch_size": 512,
+    "msg_count": 500224,
+    "elapsed_ms": 1397,
+    "throughput_mmsg_s": 0.35799529676006897,
+    "throughput_mb_s": 21.85029887451593,
+    "platform_note": "non-linux — io_uring not available; std baseline only"
+  },
+  {
+    "writer": "std-BufWriter",
+    "batch_size": 4096,
+    "msg_count": 503808,
+    "elapsed_ms": 1451,
+    "throughput_mmsg_s": 0.34698502829522243,
+    "throughput_mb_s": 21.178285418409573,
+    "platform_note": "non-linux — io_uring not available; std baseline only"
+  }
+]

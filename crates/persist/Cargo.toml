@@ -1,0 +1,11 @@
+[package]
+name = "persist"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+message-core = { path = "../message-core" }
+
+# io_uring is Linux-only; this dependency resolves only on Linux.
+[target.'cfg(target_os = "linux")'.dependencies]
+io-uring = "0.6"

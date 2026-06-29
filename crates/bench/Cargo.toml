@@ -7,6 +7,10 @@ edition = "2021"
 name = "bench"
 path = "src/main.rs"
 
+[[bin]]
+name = "persist_bench"
+path = "src/persist_bench.rs"
+
 
 [dependencies]
 bus = { path = "../bus" }
@@ -16,3 +20,4 @@ hdrhistogram = "7"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 core_affinity = "0.8"
+persist = { path = "../persist" }
