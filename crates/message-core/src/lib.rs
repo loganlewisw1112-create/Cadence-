@@ -44,16 +44,23 @@ impl Message {
         &self.payload[..end]
     }
 
-    /// Serialize to a 64-byte array (the struct's raw repr).
+    /// Serialize to a 64-byte array (little-endian field order).
     pub fn to_bytes(&self) -> [u8; 64] {
-        // SAFETY: Message is #[repr(C)] with no padding on these types.
-        unsafe { std::mem::transmute_copy(self) }
+        let mut out = [0u8; 64];
+        out[..8].copy_from_slice(&self.timestamp_ns.to_le_bytes());
+        out[8..40].copy_from_slice(&self.topic);
+        out[40..64].copy_from_slice(&self.payload);
+        out
     }
 
     /// Deserialize from a 64-byte array produced by [`Message::to_bytes`].
     pub fn from_bytes(bytes: &[u8; 64]) -> Self {
-        // SAFETY: any bit pattern is valid for u8/[u8;N] fields.
-        unsafe { std::mem::transmute_copy(bytes) }
+        let timestamp_ns = u64::from_le_bytes(bytes[..8].try_into().unwrap());
+        let mut topic = [0u8; 32];
+        topic.copy_from_slice(&bytes[8..40]);
+        let mut payload = [0u8; 24];
+        payload.copy_from_slice(&bytes[40..64]);
+        Self { timestamp_ns, topic, payload }
     }
 }
 

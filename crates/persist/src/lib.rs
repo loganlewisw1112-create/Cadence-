@@ -101,7 +101,7 @@ pub mod uring {
 
     impl UringWriter {
         pub fn create(path: impl AsRef<Path>, ring_depth: u32) -> std::io::Result<Self> {
-            let file = OpenOptions::new().create(true).append(false).write(true).open(path)?;
+            let file = OpenOptions::new().create(true).write(true).truncate(false).open(path)?;
             let ring = IoUring::new(ring_depth)?;
             Ok(Self { ring, file, offset: 0, ring_depth })
         }
