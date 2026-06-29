@@ -243,7 +243,7 @@ fn spsc_throughput(label: &str, pinned: bool) -> ThrResult {
         if pinned { pin(1); }
         let mut count = 0usize;
         loop {
-            while let Some(_) = rx.try_recv() { count += 1; }
+            while rx.try_recv().is_some() { count += 1; }
             if done.load(Ordering::Relaxed) { break; }
             std::hint::spin_loop();
         }
@@ -344,7 +344,7 @@ fn main() {
 
 fn base64_encode(input: &[u8]) -> String {
     const T: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity((input.len() + 2) / 3 * 4);
+    let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
     for chunk in input.chunks(3) {
         let b0 = chunk[0] as u32;
         let b1 = chunk.get(1).copied().unwrap_or(0) as u32;
