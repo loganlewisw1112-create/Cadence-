@@ -329,11 +329,15 @@ fn main() {
     print_thr(&r); thr_results.push(r);
 
     // ── Export ────────────────────────────────────────────────────────────────
-    let json = serde_json::to_string_pretty(&AllResults {
-        latency: lat_results, throughput: thr_results,
-    }).unwrap();
+    let all = AllResults { latency: lat_results, throughput: thr_results };
+    let json = serde_json::to_string_pretty(&all).unwrap();
     std::fs::write("bench_results.json", &json).unwrap();
     println!("\nExported → bench_results.json");
+
+    // Generate SVG histogram (log-scale, Disruptor/Chronicle convention)
+    let svg = render_latency_svg(&all.latency);
+    std::fs::write("latency_histogram.svg", &svg).unwrap();
+    println!("Generated → latency_histogram.svg");
 }
 
 // ── base64 ───────────────────────────────────────────────────────────────────
@@ -352,6 +356,94 @@ fn base64_encode(input: &[u8]) -> String {
         out.push(if chunk.len() > 2 { T[(n & 0x3F) as usize] as char } else { '=' });
     }
     out
+}
+
+// ── SVG histogram (log-scale, Disruptor/Chronicle convention) ────────────────
+
+const SVG_W: f64 = 900.0;
+const SVG_H: f64 = 480.0;
+const SVG_PL: f64 = 88.0;
+const SVG_PR: f64 = 210.0;
+const SVG_PT: f64 = 44.0;
+const SVG_PB: f64 = 64.0;
+const SVG_COLORS: &[&str] = &["#4e79a7", "#f28e2b", "#59a14f"];
+
+fn pct_x(p: f64) -> f64 {
+    let inv = (1.0 - p).max(1e-5_f64);
+    let lmin = (1.0_f64 - 0.9999_f64).log10();
+    let t = (inv.log10() - lmin) / (0.0_f64 - lmin);
+    SVG_PL + (1.0 - t) * (SVG_W - SVG_PL - SVG_PR)
+}
+
+fn lat_y(ns: u64, max_ns: u64) -> f64 {
+    let lo = 1.5_f64; // ~30 ns floor on log scale
+    let hi = (max_ns as f64).max(1.0).log10();
+    let t = ((ns as f64).max(1.0).log10() - lo) / (hi - lo);
+    SVG_PT + (1.0 - t) * (SVG_H - SVG_PT - SVG_PB)
+}
+
+fn render_latency_svg(results: &[LatResult]) -> String {
+    let gmax = results.iter().map(|r| r.latency.max_ns).max().unwrap_or(10_000_000);
+
+    let mut s = format!(
+        "<svg xmlns='http://www.w3.org/2000/svg' width='{}' height='{}' style='font-family:monospace;background:#1e1e2e'>",
+        SVG_W, SVG_H
+    );
+
+    // Title
+    s += &format!("<text x='{}' y='26' fill='#cdd6f4' font-size='14' text-anchor='middle' font-weight='bold'>Cadence — Latency Histogram (log scale, CO-corrected)</text>", SVG_W / 2.0);
+
+    // Y grid + labels
+    for (ns, lbl) in [(100u64,"100ns"),(1_000,"1µs"),(10_000,"10µs"),(100_000,"100µs"),(1_000_000,"1ms"),(10_000_000,"10ms")] {
+        if ns > gmax * 3 { continue; }
+        let y = lat_y(ns, gmax);
+        s += &format!("<line x1='{SVG_PL}' y1='{y:.1}' x2='{}' y2='{y:.1}' stroke='#45475a' stroke-width='1'/>", SVG_W - SVG_PR);
+        s += &format!("<text x='{}' y='{y:.1}' fill='#a6adc8' font-size='10' text-anchor='end' dominant-baseline='middle'>{lbl}</text>", SVG_PL - 5.0);
+    }
+
+    // X grid + labels
+    for (p, lbl) in [(0.0,"p0"),(0.50,"p50"),(0.90,"p90"),(0.95,"p95"),(0.99,"p99"),(0.999,"p99.9"),(0.9999,"p99.99")] {
+        let x = pct_x(p);
+        s += &format!("<line x1='{x:.1}' y1='{SVG_PT}' x2='{x:.1}' y2='{}' stroke='#45475a' stroke-width='1'/>", SVG_H - SVG_PB);
+        s += &format!("<text x='{x:.1}' y='{}' fill='#a6adc8' font-size='10' text-anchor='middle'>{lbl}</text>", SVG_H - SVG_PB + 13.0);
+    }
+
+    // Axes
+    s += &format!("<line x1='{SVG_PL}' y1='{SVG_PT}' x2='{SVG_PL}' y2='{}' stroke='#cdd6f4' stroke-width='1.5'/>", SVG_H - SVG_PB);
+    s += &format!("<line x1='{SVG_PL}' y1='{}' x2='{}' y2='{}' stroke='#cdd6f4' stroke-width='1.5'/>", SVG_H - SVG_PB, SVG_W - SVG_PR, SVG_H - SVG_PB);
+
+    // Lines + legend
+    for (i, r) in results.iter().enumerate() {
+        let color = SVG_COLORS[i % SVG_COLORS.len()];
+        let pts: Vec<(f64,f64)> = vec![
+            (0.0,    r.latency.min_ns),
+            (0.50,   r.latency.p50_ns),
+            (0.95,   r.latency.p95_ns),
+            (0.99,   r.latency.p99_ns),
+            (0.999,  r.latency.p99_9_ns),
+            (0.9999, r.latency.max_ns),
+        ].into_iter().map(|(p,ns)| (pct_x(p), lat_y(ns, gmax))).collect();
+
+        let pts_str: String = pts.iter().map(|(x,y)| format!("{x:.1},{y:.1}")).collect::<Vec<_>>().join(" ");
+        s += &format!("<polyline points='{pts_str}' fill='none' stroke='{color}' stroke-width='2.5' stroke-linejoin='round'/>");
+        for (x,y) in &pts {
+            s += &format!("<circle cx='{x:.1}' cy='{y:.1}' r='3.5' fill='{color}'/>");
+        }
+
+        // Legend box
+        let lx = SVG_W - SVG_PR + 12.0;
+        let ly = SVG_PT + i as f64 * 22.0;
+        s += &format!("<rect x='{lx}' y='{ly}' width='12' height='12' fill='{color}'/>");
+        let lbl = if r.label.len() > 22 { &r.label[..22] } else { &r.label };
+        s += &format!("<text x='{}' y='{}' fill='#cdd6f4' font-size='10'>{lbl}</text>", lx + 16.0, ly + 10.0);
+    }
+
+    // Axis labels
+    s += &format!("<text x='{}' y='{}' fill='#a6adc8' font-size='11' text-anchor='middle'>Percentile</text>", SVG_W/2.0, SVG_H - 6.0);
+    s += &format!("<text x='12' y='{}' fill='#a6adc8' font-size='11' text-anchor='middle' transform='rotate(-90,12,{})'>Latency (ns, log)</text>", SVG_H/2.0, SVG_H/2.0);
+
+    s += "</svg>";
+    s
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -375,6 +467,21 @@ mod tests {
         assert_eq!(base64_encode(b"Man"), "TWFu");
         assert_eq!(base64_encode(b"Ma"),  "TWE=");
         assert_eq!(base64_encode(b"M"),   "TQ==");
+    }
+
+    #[test]
+    fn svg_contains_key_elements() {
+        let dummy = vec![LatResult {
+            label: "test".to_string(), rate_hz: 1, msg_count: 1,
+            drop_count: 0, pinned: false,
+            latency: Pct { min_ns: 100, mean_ns: 500.0, p50_ns: 300,
+                           p95_ns: 800, p99_ns: 1000, p99_9_ns: 2000, max_ns: 5000 },
+            hdr_base64: String::new(),
+        }];
+        let svg = render_latency_svg(&dummy);
+        assert!(svg.contains("<svg"));
+        assert!(svg.contains("polyline"));
+        assert!(svg.contains("p99"));
     }
 
     #[test]

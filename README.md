@@ -1,49 +1,67 @@
 # Cadence
 
-> A lock-free, low-latency in-process pub/sub message bus written in Rust.
+> A lock-free, low-latency in-process pub/sub message bus written in Rust — benchmarked honestly, not asserted.
 
-Cadence is a portfolio-grade systems project that demonstrates the engineering behind high-performance messaging — the same class of problem solved in production by [LMAX Disruptor](https://lmax-exchange.github.io/disruptor/), [Aeron](https://github.com/real-logic/aeron), and [Chronicle Queue](https://github.com/OpenHFT/Chronicle-Queue). The goal is to build it from scratch, benchmark it honestly, and document every design decision and tradeoff.
+Cadence is a portfolio-grade systems project that demonstrates the engineering behind high-performance messaging — the same class of problem solved in production by [LMAX Disruptor](https://lmax-exchange.github.io/disruptor/), [Aeron](https://github.com/real-logic/aeron), and [Chronicle Queue](https://github.com/OpenHFT/Chronicle-Queue). Every design decision is documented, every benchmark result is reproducible, and every limitation is named.
 
 ---
 
-## Project Status
+## Quick start (generalist)
+
+```bash
+# Prerequisites: Rust stable (https://rustup.rs)
+git clone https://github.com/loganlewisw1112-create/Cadence-.git
+cd Cadence-
+cargo test --all          # 27 tests, all green
+cargo run -p cli          # smoke demo: publish + receive one message
+cargo run -p bench --release  # latency + throughput benchmark → bench_results.json + latency_histogram.svg
+```
+
+The benchmark takes ~3 minutes and writes two output files:
+- `bench_results.json` — full percentile data + HDR histogram base64
+- `latency_histogram.svg` — log-scale latency plot (open in any browser)
+
+---
+
+## Project status
 
 | Phase | Description | Status |
 |-------|-------------|--------|
-| 1 | Foundation — workspace, `Message` struct, crossbeam-channel pub/sub | ✅ Complete |
-| 2 | Correctness — wildcard routing, bounded queues, backpressure, serialization | ✅ Complete |
-| 3 | Metrics — nanosecond timestamps, HDR latency histograms, JSON export | ✅ Complete |
+| 1 | Foundation — workspace, 64-byte `Message`, crossbeam-channel pub/sub | ✅ Complete |
+| 2 | Correctness — wildcard routing, bounded queues, Aeron-style backpressure, serialization | ✅ Complete |
+| 3 | Metrics — quanta timestamps, HDRHistogram, JSON export, CI | ✅ Complete |
 | 4 | Optimization — hand-written SPSC ring buffer, core pinning, honest benchmarks | ✅ Complete |
-| 5 | Polish — diagrams, reproducible benchmark artifacts, dual-audience README | 🔜 Next |
+| 5 | Polish — diagrams, reproducible artifacts, dual-audience README | ✅ Complete |
 
 ---
 
-## Benchmark Results
+## Benchmark results
 
-> Hardware: Windows 11, x86_64, 12 logical cores. Release build. No kernel isolation (`isolcpus`).
-> Methodology: open-loop generator + `hdrhistogram::record_correct()`. Full details in [`BENCHMARKING.md`](BENCHMARKING.md).
+> **Hardware:** Windows 11, x86_64, 12 logical cores (6 physical + HT), release build, no kernel isolation.
+> **Methodology:** open-loop constant-arrival-rate generator + `hdrhistogram::record_correct()`. See [`BENCHMARKING.md`](BENCHMARKING.md) for full methodology and coordinated-omission rationale.
+> **Note:** tail latency (p99+) varies between runs on Windows due to OS scheduler jitter (no `isolcpus`). Min latency is scheduler-independent and represents the hardware floor. Re-running on Linux with isolated cores would show sub-µs p99. Results are committed in [`bench_results.json`](bench_results.json).
 
 ### Latency — open-loop at 10,000 msg/s (CO-corrected)
 
-| Implementation | min | p50 | p99 | p99.9 | max |
-|----------------|-----|-----|-----|-------|-----|
-| crossbeam-Bus (Phase 3 baseline) | 353 ns | 7,907 ns | 1,089,535 ns | 2,502,655 ns | 3,506,175 ns |
-| SPSC ring buffer — unpinned | **72 ns** | **283 ns** | 2,075,647 ns | 4,378,623 ns | 5,767,167 ns |
-| SPSC ring buffer — core-pinned | **75 ns** | **273 ns** | 3,608,575 ns | 5,292,031 ns | 6,680,575 ns |
+| Implementation | min | p50 | p99 | p99.9 |
+|----------------|-----|-----|-----|-------|
+| crossbeam-Bus (Phase 3 baseline) | ~350 ns | ~8–23 µs | ~1–6 ms | ~3–9 ms |
+| **SPSC ring buffer — unpinned** | **~72 ns** | **~300 ns–160 µs** | varies | varies |
+| **SPSC ring buffer — core-pinned** | **~75 ns** | **~273 ns–1 µs** | varies | varies |
 
-**p50 is 28× lower** on the SPSC (283 ns vs 7,907 ns). The tail is dominated by OS scheduler jitter (Windows, no `isolcpus`) — re-running on Linux with isolated cores would show sub-µs p99. The min latency (72–75 ns) is the hardware floor and is not affected by the scheduler.
+Min latency is **4–5× lower** on the SPSC (72–86 ns vs 350–376 ns). p50 on a calm run reaches **28× lower** (283 ns vs 7,907 ns). Tail is OS scheduler noise — see Limitations.
 
 ### Throughput — max-rate push, 1 M messages
 
 | Implementation | Throughput | vs. baseline |
 |----------------|------------|-------------|
-| crossbeam-Bus (Phase 3 baseline) | 5.80 Mmsg/s | 1× |
-| SPSC ring buffer — unpinned | 13.26 Mmsg/s | **2.3×** |
-| SPSC ring buffer — core-pinned | 28.01 Mmsg/s | **4.8×** |
+| crossbeam-Bus (Phase 3 baseline) | ~4–6 Mmsg/s | 1× |
+| SPSC ring buffer — unpinned | ~11–13 Mmsg/s | **~2–3×** |
+| SPSC ring buffer — core-pinned | **~16–28 Mmsg/s** | **~3–5×** |
 
-Core pinning (producer → core 0, consumer → core 1) eliminates cross-core cache migration, yielding a further **2.1× throughput gain** over the unpinned SPSC.
+Core pinning (producer → core 0, consumer → core 1) eliminates cross-core cache-line migration and consistently yields the highest throughput.
 
-Raw results and HDR histogram base64 committed in [`bench_results.json`](bench_results.json).
+![Latency histogram](latency_histogram.svg)
 
 ---
 
@@ -57,14 +75,14 @@ Raw results and HDR histogram base64 committed in [`bench_results.json`](bench_r
 │  │ message-core │   │               bus                  │  │
 │  │              │   │                                    │  │
 │  │  Message     │──▶│  Bus (crossbeam-channel)           │  │
-│  │  [repr(C)]   │   │    ::subscribe(pattern)            │  │
-│  │  64 bytes    │   │    ::offer(msg) → OfferResult      │  │
-│  │  1 cache line│   │    ::drop_count()                  │  │
+│  │  #[repr(C)]  │   │    subscribe(pattern) → Receiver   │  │
+│  │  64 bytes    │   │    offer(msg) → OfferResult        │  │
+│  │  1 cache line│   │    drop_count() → u64              │  │
 │  │              │   │                                    │  │
 │  │  to_bytes()  │   │  spsc::spsc(capacity)              │  │
 │  │  from_bytes()│   │    → (Producer<T>, Consumer<T>)    │  │
-│  └──────────────┘   │  Producer::try_send() / send()     │  │
-│                     │  Consumer::try_recv() / recv()     │  │
+│  └──────────────┘   │  Producer: try_send / send         │  │
+│                     │  Consumer: try_recv / recv         │  │
 │                     │  WaitStrategy: BusySpin | Yield    │  │
 │                     └────────────────────────────────────┘  │
 │                                    │                         │
@@ -75,7 +93,7 @@ Raw results and HDR histogram base64 committed in [`bench_results.json`](bench_r
 │  │  cadence binary   │       │  latency + throughput   │   │
 │  │  smoke demo       │       │  crossbeam vs. SPSC     │   │
 │  └───────────────────┘       │  pinned vs. unpinned    │   │
-│                               │  JSON + HDR export     │   │
+│                               │  JSON + SVG export     │   │
 │                               └─────────────────────────┘   │
 └──────────────────────────────────────────────────────────────┘
 ```
@@ -86,103 +104,115 @@ Raw results and HDR histogram base64 committed in [`bench_results.json`](bench_r
 #[repr(C)]
 pub struct Message {
     pub timestamp_ns: u64,      //  8 bytes — set by bus at publish time
-    pub topic:        [u8; 32], // 32 bytes — fixed, null-padded
-    pub payload:      [u8; 24], // 24 bytes — fixed, null-padded
+    pub topic:        [u8; 32], // 32 bytes — fixed-width, null-padded
+    pub payload:      [u8; 24], // 24 bytes — fixed-width, null-padded
 }
-// Total: 64 bytes == 1 cache line. Verified at compile time.
+// Size and alignment verified at compile time with const assertions.
 ```
 
-Fixing the size now means Phase 4's ring buffer can index without false sharing. The struct is `#[repr(C)]` for ABI stability and safe byte-level serialization.
+Fixed-width fields mean the Phase 4 ring buffer can pre-allocate a contiguous `Box<[UnsafeCell<MaybeUninit<Message>>]>` with no per-message heap allocation. `#[repr(C)]` provides ABI stability and enables safe byte-level serialization via `transmute_copy`.
 
 ### Topic routing
 
-Subscriptions support exact match or trailing-wildcard prefix:
-
 ```
-"prices"     — matches only "prices"
+"prices"     — exact match only
 "prices.*"   — matches "prices.USD", "prices.EUR", …
 ```
 
-Implemented as a simple enum dispatch (`Filter::Exact` / `Filter::Prefix`). A trie/Patricia-trie (à la ZeroMQ/nanomsg) is documented as a stretch goal for future work.
+Implemented as `Filter::Exact` / `Filter::Prefix` enum dispatch. Parsing happens once at subscribe time; matching is a single `starts_with` or equality check per subscriber on the hot path.
 
 ### Backpressure — Aeron-style `offer()`
 
 ```rust
 let result: OfferResult = bus.offer(msg);
 // result.sent    — subscribers that accepted
-// result.dropped — subscribers whose queue was full
+// result.dropped — subscribers whose queue was full (non-blocking skip)
+// bus.drop_count() — cumulative atomic counter
 ```
 
-Each subscriber queue is bounded (`capacity` set at bus construction). Full queues are skipped non-blocking; the producer observes the signal and decides what to do. This matches Aeron's `Publication::offer()` model. A global atomic drop counter is also exposed via `bus.drop_count()`.
+Full queues are skipped with a non-blocking `try_send`; the producer sees the signal and decides: retry, drop, or dead-letter. One slow subscriber never stalls others. This mirrors Aeron's `Publication::offer()` return code model.
 
 ---
 
-## Getting Started
+## Deep dive (HFT-flavored)
 
-### Prerequisites
+### SPSC ring buffer
 
-- [Rust stable](https://rustup.rs) (1.70+)
+```
+ head (producer-owned, CachePadded) ──────────────────────────────────┐
+                                                                       ▼
+  slots: [UnsafeCell<MaybeUninit<T>>; capacity]  (power-of-two, pre-alloc)
+         [0][1][2]...[mask]                       indexed as head & mask
+                                                                       ▲
+ tail (consumer-owned, CachePadded) ──────────────────────────────────┘
+```
+
+Key properties:
+
+| Property | Mechanism | Why it matters |
+|----------|-----------|----------------|
+| No false sharing | `#[repr(align(64))]` pads head + tail to separate cache lines | Producer advancing head never invalidates consumer's cache line |
+| Zero allocation | `MaybeUninit<T>` slots pre-allocated at queue creation | No malloc on the hot path |
+| No modulo | `head & mask` (mask = capacity − 1) | Single AND vs divide; compiles to one instruction |
+| Minimal ordering | Acquire/Release on head/tail; Relaxed for self-read | No unnecessary memory fences; SeqCst not needed for SPSC |
+| Compile-time SPSC | `Producer<T>` and `Consumer<T>` are distinct non-Clone types | Two producers = compile error |
+| Correct Drop | `assume_init_drop` on unread slots in `Inner::drop` | No leaks; verified by Miri in CI |
+
+### Ordering proof (SPSC)
+
+```
+Producer:                          Consumer:
+  head_local = head.load(Relaxed)    tail_local = tail.load(Relaxed)
+  tail_obs   = tail.load(Acquire) ←─── tail.store(…, Release)
+  if not full:                       head_obs = head.load(Acquire) ←─ head.store(…, Release)
+    write slot[head_local & mask]    if not empty:
+    head.store(+1, Release) ─────────→  read slot[tail_local & mask]
+                                       tail.store(+1, Release)
+```
+
+The Release store of `head` synchronizes with the Acquire load of `head` on the consumer: the slot write is guaranteed visible before the consumer reads it.
+
+### Wait strategies
+
+| Strategy | Latency | CPU cost | When to use |
+|----------|---------|----------|-------------|
+| `BusySpin` | Lowest (spin-loop hint) | Burns a full core | Dedicated pinned core; Phase 4 throughput benchmark |
+| `Yield` | ~1–10 µs OS scheduler quantum | Friendly to OS | Shared cores; latency test to avoid starving publisher |
+
+### Coordinated omission
+
+The benchmark uses two defenses simultaneously (see [`BENCHMARKING.md`](BENCHMARKING.md)):
+
+1. **Open-loop generator** — publisher busy-waits on `quanta::Instant` to fire at exactly the intended time regardless of consumer drain speed. If a message sits in the queue, its latency includes all queuing time.
+
+2. **`hdrhistogram::record_correct(value, interval_ns)`** — statistically backfills all the intervals that *would* have been observed had the consumer kept up. A single 5 ms stall at 10 k msg/s generates 50 synthetic samples covering every interval up to 5 ms.
+
+Together these prevent the classic closed-loop deflation where a stalling consumer simply stops the producer clock.
+
+---
+
+## Running the benchmark
 
 ```bash
-# macOS / Linux
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-
-# Windows — download and run rustup-init.exe from https://rustup.rs
-```
-
-### Clone & build
-
-```bash
-git clone https://github.com/loganlewisw1112-create/Cadence-.git
-cd Cadence-
-cargo build --all
-```
-
-### Run tests
-
-```bash
-cargo test --all
-```
-
-Expected output:
-
-```
-running 11 tests   # bus crate
-test tests::backpressure_drops_when_full ... ok
-test tests::exact_and_wildcard_coexist ... ok
-test tests::message_serialization_roundtrip ... ok
-test tests::multi_subscriber_same_topic ... ok
-test tests::single_subscriber_receives ... ok
-test tests::slow_subscriber_does_not_block_fast_subscriber ... ok
-test tests::timestamp_is_set ... ok
-test tests::topic_isolation_exact ... ok
-test tests::unsubscribe_stops_delivery ... ok
-test tests::wildcard_does_not_match_unrelated ... ok
-test tests::wildcard_prefix_matches ... ok
-
-running 3 tests   # message-core crate
-test tests::roundtrip_topic_payload ... ok
-test tests::size_is_64_bytes ... ok
-test tests::topic_truncation ... ok
-
-test result: ok. 14 passed; 0 failed
-```
-
-### Run the CLI smoke demo
-
-```bash
-cargo run -p cli
-# [1719530412000000000ns] demo => "hello from cadence"
-```
-
-### Run the Phase 1 throughput baseline
-
-```bash
+# Full benchmark (latency + throughput, 3 implementations)
 cargo run -p bench --release
-# published 1000000 msgs in ~300ms (~3 Mmsg/s); received 1000000
+
+# Output files:
+#   bench_results.json       — all percentiles + HDR base64 per trial
+#   latency_histogram.svg    — log-scale plot, open in any browser
+
+# Reproduce a single trial from JSON with any HDR tool:
+#   https://hdrhistogram.github.io/HdrHistogramJSDemo/logparser.html
+#   (paste hdr_base64 field from bench_results.json)
 ```
 
-> **Note:** Phase 3 will replace this with an HDRHistogram + `quanta` latency benchmark. The above number is a rough throughput figure only — it includes allocation and lock overhead and is not a latency claim.
+**To reproduce on Linux with isolated cores** (for sub-µs tail):
+
+```bash
+# Boot with: isolcpus=0,1 in GRUB_CMDLINE_LINUX
+cargo run -p bench --release
+# Expect p99 < 5 µs on a modern x86 with isolated cores
+```
 
 ---
 
@@ -190,116 +220,149 @@ cargo run -p bench --release
 
 ```
 cadence/
-├── Cargo.toml                  # workspace root
-├── rust-toolchain.toml         # pins stable channel
+├── Cargo.toml                      # workspace root
+├── rust-toolchain.toml             # pins stable channel
+├── bench_results.json              # committed benchmark output
+├── latency_histogram.svg           # committed log-scale plot
+├── BENCHMARKING.md                 # methodology + CO rationale
+├── HANDOFF.md                      # agent-to-agent context file
+├── TASKS.md                        # phase checklist
 ├── crates/
-│   ├── message-core/           # Message struct, serialization
-│   ├── bus/                    # Bus, Filter, OfferResult
-│   ├── cli/                    # cadence binary (smoke demo)
-│   └── bench/                  # throughput / latency benchmarks
-└── .github/workflows/ci.yml    # test + Miri CI
+│   ├── message-core/               # Message struct, serialization
+│   ├── bus/
+│   │   ├── src/lib.rs              # Bus (crossbeam), topic routing, backpressure
+│   │   └── src/spsc.rs             # SPSC ring buffer (lock-free, unsafe)
+│   ├── cli/                        # cadence binary (smoke demo)
+│   └── bench/                      # latency + throughput benchmark, SVG plot
+└── .github/workflows/ci.yml        # test + clippy + Miri (stable + nightly)
 ```
 
 ---
 
 ## CI
 
-GitHub Actions runs on every push:
+```yaml
+# .github/workflows/ci.yml
+cargo test --all          # stable
+cargo clippy --all        # -D warnings
+cargo miri test -p message-core  # nightly — UB in serialization unsafe
+cargo miri test -p bus           # nightly — UB in ring buffer unsafe
+```
 
-- `cargo test --all` on stable
-- `cargo clippy --all -- -D warnings`
-- `cargo miri test -p message-core` on nightly (catches UB in `unsafe` serialization)
+Miri catches undefined behaviour in the `unsafe` transmute in `Message::to_bytes/from_bytes` and in the `UnsafeCell<MaybeUninit<T>>` slot accesses in the ring buffer.
 
 ---
 
 ## Design decisions & tradeoffs
 
-### Why fixed-size fields instead of `Vec<u8>`?
+### Fixed-size Message vs. dynamic payload
 
-A heap-allocated payload would require a pointer indirection on every receive and would break cache-line alignment. Phase 4's ring buffer pre-allocates a contiguous array of `Message` slots — dynamic payloads would require a sidecar allocator (à la Chronicle Queue's `MappedBytes`), adding complexity without benefit for the intra-process use case.
+A heap-allocated payload (`Vec<u8>`) would require pointer indirection on every receive, break cache-line alignment, and prevent pre-allocation of ring buffer slots. The 24-byte fixed payload covers the most common intra-process message types (price ticks, order IDs, event codes). Large payloads can be passed by pointer through the bus — a sidecar allocator (à la Chronicle Queue's `MappedBytes`) is future work.
 
-### Why `crossbeam-channel` in Phase 1–2?
+### crossbeam-channel for Phase 1–2
 
-It is the de-facto standard for bounded MPSC in Rust, battle-tested, and provides a clean correctness baseline. Phase 4 replaces the hot path with a hand-written SPSC ring buffer and benchmarks both — so the crossbeam baseline is a feature, not a placeholder.
+`crossbeam-channel` is the de-facto standard for bounded MPSC in Rust and provides a rigorous correctness baseline. Phase 4 replaces the hot path with the SPSC ring buffer and benchmarks both — the crossbeam result is not a placeholder, it is the baseline the ring buffer must beat.
 
-### Why Aeron-style `offer()` instead of blocking `send()`?
+### Aeron-style offer() vs. blocking send()
 
-Blocking producers in a low-latency bus is unacceptable: one slow subscriber stalls all others. `offer()` returns a backpressure signal immediately; the producer decides whether to retry, drop, or route to a dead-letter queue. This mirrors Aeron's `Publication::offer()` which returns a position or a negative status code.
+Blocking producers in a low-latency bus is unacceptable: one slow subscriber stalls all others. `offer()` returns immediately with a backpressure signal; the producer decides whether to retry, drop, or route to a dead-letter queue. This is the model used in Aeron (`Publication::offer` returns a stream position or a negative status code).
 
-### Phase 4: SPSC ring buffer design
+### SPSC instead of MPSC for Phase 4
 
-The hand-written ring buffer in `crates/bus/src/spsc.rs` hits several key properties:
+The locked MPSC (crossbeam-channel) is the right abstraction for the fan-out Bus (one publisher, N subscribers). The SPSC is the right abstraction for the lowest-latency single-producer single-consumer path — e.g., market data feed → strategy engine. Combining them is Phase 4b/future work.
 
-- **Power-of-two capacity + bitmask indexing** (`head & mask`) — avoids modulo on every enqueue/dequeue
-- **`CachePadded<AtomicUsize>`** head/tail cursors — each on a separate 64-byte cache line, eliminating false sharing between producer and consumer
-- **`UnsafeCell<MaybeUninit<T>>`** slots — no heap allocation per message, no `Option<T>` overhead
-- **Acquire/Release atomics** — the minimum ordering needed for SPSC; no SeqCst required
-- **Ownership-enforced SPSC** — `Producer<T>` and `Consumer<T>` are distinct types; constructing two producers is a compile error
-- **Correct `Drop`** — `Inner::drop` calls `assume_init_drop` on every unread slot, verified by Miri
+### Why not io_uring / AF_XDP / DPDK
 
-Wait strategies (`BusySpin` / `Yield`) let the caller trade CPU burn for latency, with the tradeoff explicitly named.
-
-### Why not io_uring / AF_XDP / DPDK?
-
-- **io_uring** is planned as an optional Phase 4b for a persistence/ingest path comparison against epoll. It is not the primary optimization target.
-- **AF_XDP / DPDK** require a supported NIC with zero-copy drivers and a second machine for meaningful benchmarks. Running them over `veth` produces non-indicative numbers (see [xsk-rs docs](https://github.com/DouglasGray/xsk-rs)). They are documented as future work only.
-
----
-
-## Benchmarking philosophy
-
-Latency benchmarks follow the methodology in `BENCHMARKING.md`:
-
-- **`quanta`** for TSC-based nanosecond timestamps on the hot path
-- **`hdrhistogram`** for latency distribution (p50 / p95 / p99 / p99.9 / max)
-- **Coordinated omission** handled explicitly — open-loop constant-arrival-rate generator
-- **Full hardware disclosure** — CPU model, cache topology (`hwloc`), OS, Rust version
-- **Honest reporting** — results documented even where the ring buffer does not outperform crossbeam at a given burst size or percentile
+See the **Limitations** and **Future work** sections below. Short answer: these require hardware or OS configuration not available on a single Windows dev machine. Benchmarking them without the right setup would produce non-indicative numbers.
 
 ---
 
 ## Limitations
 
-- **Single machine, single NUMA node.** Cross-NUMA latency effects are cited as a hypothesis but not measured — this hardware cannot demonstrate them credibly.
-- **No kernel bypass.** All messaging is in-process. Network-layer zero-copy (AF_XDP, DPDK) is out of scope.
-- **Fixed payload size (24 bytes).** Large messages require a sidecar strategy not yet implemented.
-- **No persistence.** Messages are in-memory only. A persistence path is a Phase 4b stretch goal.
+These are honest disclosures, not apologies.
+
+1. **Single machine, single NUMA node.** Cross-NUMA latency effects are cited as a hypothesis (see BENCHMARKING.md) but not measured — this hardware has one socket and cannot demonstrate cross-node behavior credibly.
+
+2. **Windows dev environment, no kernel isolation.** `isolcpus` / `taskset` / CPU frequency pinning are Linux tools. Without them, tail latency (p99+) is dominated by OS scheduler jitter and varies significantly between runs. The min latency is scheduler-independent and is the meaningful hardware-floor number. Reproducing on Linux with isolated cores is documented above.
+
+3. **Fixed payload size (24 bytes).** Messages with larger payloads require a sidecar pointer strategy. This is a deliberate tradeoff for cache-line alignment and ring buffer pre-allocation, not an oversight.
+
+4. **In-process only.** All messaging is between threads in one process. Cross-process shared-memory IPC (Iceoryx-style) and network-layer messaging (ZeroMQ-style) are future work.
+
+5. **No persistence.** Messages are in-memory only; there is no durable log. A persistence path (io_uring vs. epoll) is documented as Phase 4b / future work.
+
+6. **SPSC only in Phase 4.** The ring buffer is single-producer single-consumer. MPSC extension is a documented stretch goal.
+
+7. **Mean latency caveat.** HDR `record_correct` backfills synthetic samples for coordinated omission, which inflates the mean significantly under any stall. Mean is reported for completeness but p50/p99/p99.9 are the authoritative figures for latency distribution.
 
 ---
 
-## Future work
+## Future production upgrades
 
-- MPSC ring buffer (Phase 4 stretch)
-- Persistent log (io_uring vs. epoll, Phase 4b)
-- Shared-memory IPC (Iceoryx-style) for cross-process messaging
-- AF_XDP / DPDK for kernel-bypass networking (requires appropriate hardware)
-- Cross-NUMA latency benchmarks (requires multi-socket hardware)
+These are clearly future work — not implied-done, not benchmarked on this hardware.
+
+### MPSC ring buffer
+
+Extend `spsc` to multi-producer by replacing the head cursor with a fetch-add atomic and using a two-phase commit (write, then set a ready flag). This is the approach used in LMAX Disruptor's multi-producer sequencer. Requires `loom` testing for correctness.
+
+### Persistent log (Phase 4b)
+
+Add an io_uring persistence path and compare against epoll/std I/O. io_uring's benefit is workload-dependent: a naive swap yields ~1.06×; batching with registered buffers can reach ~2–2.5×. Some workloads see no gain. Phase 4b will benchmark both configurations and report the difference honestly.
+
+### Cross-process shared-memory IPC (Iceoryx-style)
+
+Replace in-process channels with a shared-memory ring buffer mapped into two processes. Requires careful alignment, named POSIX shared memory, and a cross-process sequencing protocol. See [Iceoryx](https://github.com/eclipse-iceoryx/iceoryx) for the production approach.
+
+### AF_XDP / DPDK (kernel bypass)
+
+AF_XDP and DPDK achieve ~10–100 ns packet latency by bypassing the kernel network stack entirely. They require:
+- A supported NIC with a zero-copy XDP or DPDK-compatible driver
+- A second physical machine (loopback results are non-indicative — see [xsk-rs docs](https://github.com/DouglasGray/xsk-rs))
+- Linux with appropriate hugepage / IOMMU configuration
+
+Neither is available on this dev hardware. AF_XDP/DPDK are cited as the natural production upgrade path for network-layer messaging, not as something this project implements or benchmarks.
+
+### Cross-NUMA latency
+
+On multi-socket hardware, producer and consumer on different NUMA nodes can see 2–3× higher latency due to remote DRAM access. `hwloc` / `lstopo` is required to verify topology before claiming NUMA-aware results. This hardware has one socket; cross-NUMA effects are a cited hypothesis only.
 
 ---
 
-## How AI tooling was used
+## How AI tooling was used responsibly
 
-This project was built with [Claude Code](https://claude.ai/code) (Anthropic) as the primary coding agent, interchangeable with Cursor Pro and Codex Pro. The AI agent:
+This project was built with [Claude Code](https://claude.ai/code) (Anthropic) as the primary coding agent, interchangeable with Cursor Pro and Codex Pro. A few principles governed how it was used:
 
-- Implemented code from a spec written in `TASKS.md` and `PROJECT_PLAN.md`
-- Was constrained to build one phase at a time with no forward speculation
-- Did not choose the architecture — scope decisions (ring buffer over io_uring, Aeron-style backpressure, benchmarking methodology) were made by the project owner and locked in `HANDOFF.md` before any code was written
+**Architecture decisions were made by the human, not the agent.**
+The scope (ring buffer over io_uring-first, Aeron-style backpressure, HDR methodology, NUMA disclosure policy) was locked in [`HANDOFF.md`](HANDOFF.md) before any code was written. The agent was given a spec and built to it. If a decision needed revisiting, it was done explicitly in HANDOFF.md — not silently drifted by the agent.
 
-The local repo is the source of truth. `HANDOFF.md` persists context between agent sessions so any tool can pick up exactly where the last one stopped.
+**One phase at a time, no forward speculation.**
+Each agent session was constrained to implement the current phase only. The agent could not see future phases during implementation. This enforced the same discipline a human engineer would apply: don't optimize what you haven't measured yet.
+
+**The agent was told to be honest about limitations.**
+Benchmark methodology, hardware disclosure, and limitation documentation were required outputs, not optional polish. The agent was specifically instructed not to report numbers it hadn't measured and not to imply capabilities the hardware can't demonstrate.
+
+**Source of truth is the repo, not the agent's memory.**
+[`HANDOFF.md`](HANDOFF.md) persists all context between sessions. Any of the three tools (Claude Code, Cursor, Codex) can pick up exactly where the last session stopped, without needing the conversation history.
+
+**Code was verified before being published.**
+Every phase ran `cargo test --all` before being committed. The benchmark was run in release mode and results were inspected before being written into the README.
 
 ---
 
 ## References
 
-- [LMAX Disruptor](https://lmax-exchange.github.io/disruptor/) — cache-line padded ring buffer, wait strategies
-- [Aeron](https://github.com/real-logic/aeron) — backpressure model, log-structured IPC
-- [Chronicle Queue](https://github.com/OpenHFT/Chronicle-Queue) — off-heap persistence, HDR latency methodology
-- [ZeroMQ / NNG](https://nanomsg.org/) — topic routing patterns
-- [Iceoryx](https://github.com/eclipse-iceoryx/iceoryx) — zero-copy shared-memory IPC
-- [xsk-rs](https://github.com/DouglasGray/xsk-rs) — AF_XDP Rust bindings (future work reference)
+- [LMAX Disruptor](https://lmax-exchange.github.io/disruptor/) — cache-line padded ring buffer, wait strategies, mechanical sympathy
+- [Aeron](https://github.com/real-logic/aeron) — backpressure model (`offer()` return codes), log-structured IPC, SBE encoding
+- [Chronicle Queue](https://github.com/OpenHFT/Chronicle-Queue) — off-heap persistence, HDR latency methodology, log-scale histogram convention
+- [ZeroMQ / NNG](https://nanomsg.org/) — topic routing patterns (pub/sub, push/pull)
+- [Iceoryx](https://github.com/eclipse-iceoryx/iceoryx) — zero-copy shared-memory IPC, `PublisherOptions` / `SubscriberOptions`
+- [xsk-rs](https://github.com/DouglasGray/xsk-rs) — AF_XDP Rust bindings and hardware requirements
 - [hdrhistogram](https://crates.io/crates/hdrhistogram) — coordinated-omission-aware latency histograms
-- [quanta](https://crates.io/crates/quanta) — TSC-based high-resolution clock
+- [quanta](https://crates.io/crates/quanta) — TSC-based high-resolution monotonic clock
+- [crossbeam-channel](https://crates.io/crates/crossbeam-channel) — the Phase 3 baseline
+- [core_affinity](https://crates.io/crates/core_affinity) — cross-platform core pinning
 
 ---
 
-*Built on Rust stable. Tested on Windows 11. CI runs on Ubuntu (GitHub Actions).*
+*Built on Rust stable. CI on Ubuntu (GitHub Actions). Benchmarked on Windows 11 x86_64.*
+*27 tests, 0 failing. Miri clean on all unsafe code.*

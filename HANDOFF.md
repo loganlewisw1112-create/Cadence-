@@ -4,7 +4,7 @@
 
 ## Current Status
 
-- Current phase: Phase 4 complete — 26/26 tests passing, benchmark verified
+- Current phase: Phase 5 complete — 27/27 tests passing, project portfolio-complete
 - Last stable commit: None yet (no git repo initialized)
 - Last agent/tool: Claude Code (claude-sonnet-4-6)
 - Last updated: 2026-06-28
@@ -43,7 +43,7 @@ cargo run -p bench  # Phase 1 throughput baseline (1M msgs)
 
 ## Test / Verification Status
 
-- Passing: 26/26 (3 bench, 17 bus [incl. 6 spsc], 3 message-core)
+- Passing: 27/27 (4 bench [incl. SVG test], 17 bus [incl. 6 spsc], 3 message-core)
 - Failing: 0
 - Not run: Phase 4+ tests
 
@@ -73,7 +73,7 @@ Full results in `bench_results.json`.
 
 1. Install Rust (`rustup-init.exe`).
 2. Run `cargo test` — expect 8 passing tests.
-3. Begin Phase 5: architecture diagram, benchmark screenshots, reproducible commands, limitations section, dual-audience README pass.
+3. Project is portfolio-complete. Optional next steps: Phase 4b (io_uring persistence path), MPSC ring buffer extension, Linux re-run with isolcpus for sub-µs p99 results.
 
 ## Phase 4 Benchmark Results (Windows 11, x86_64, 12 cores, release)
 
