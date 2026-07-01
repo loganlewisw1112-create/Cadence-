@@ -1,11 +1,6 @@
 # Benchmarking Standard — Cadence
 
-This file is written **before any code**, deliberately. The single biggest
-credibility risk for a low-latency systems portfolio project is an
-unrealistic or methodologically sloppy benchmark — more damaging than not
-having a benchmark at all. This document is the standard every benchmark in
-this repo must follow. If a benchmark doesn't meet it, fix the benchmark or
-don't publish the number.
+This document defines the methodology every benchmark in this repo follows.
 
 ## Principles
 
