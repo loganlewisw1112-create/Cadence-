@@ -20,10 +20,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@nightly
         with:
           components: miri
-      - run: cargo miri setup
-      - run: cargo miri test -p message-core
+      - run: cargo +nightly miri setup
+      - run: cargo +nightly miri test -p message-core
         env:
           MIRIFLAGS: "-Zmiri-ignore-leaks -Zmiri-disable-isolation"
-      - run: cargo miri test -p bus -- spsc
+      - run: cargo +nightly miri test -p bus -- spsc
         env:
           MIRIFLAGS: "-Zmiri-ignore-leaks -Zmiri-disable-isolation"
