@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 message-core = { path = "../message-core" }
 
-# io_uring is Linux-only; this dependency resolves only on Linux.
+# io_uring is Linux-only; these dependencies resolve only on Linux.
 [target.'cfg(target_os = "linux")'.dependencies]
 io-uring = "0.6"
+libc = "0.2"

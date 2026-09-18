@@ -30,6 +30,12 @@ use std::fs::{File, OpenOptions};
 use std::io::{BufWriter, Write};
 use std::path::Path;
 
+/// BufWriter capacity. Sized to hold the largest benchmark batch
+/// (4096 × 64 B = 256 KiB) in one underlying `write` syscall, so that
+/// "batch size" is the only knob that changes syscall count — see
+/// VERIFICATION_PLAN.md G3.
+pub const STD_BUF_CAP: usize = 512 * 1024;
+
 // ── Shared interface ──────────────────────────────────────────────────────────
 
 pub trait MessageWriter {
@@ -53,7 +59,7 @@ pub struct StdWriter {
 impl StdWriter {
     pub fn create(path: impl AsRef<Path>) -> std::io::Result<Self> {
         let file = OpenOptions::new().create(true).append(true).open(path)?;
-        Ok(Self { inner: BufWriter::with_capacity(64 * 1024, file) })
+        Ok(Self { inner: BufWriter::with_capacity(STD_BUF_CAP, file) })
     }
 }
 
@@ -156,6 +162,104 @@ pub mod uring {
 
         fn name(&self) -> &'static str { "io_uring-Write" }
     }
+
+    /// Append-only log writer backed by `io_uring` **with a registered
+    /// (fixed) buffer** — the performance lever the naive `UringWriter`
+    /// leaves on the table (VERIFICATION_PLAN.md G2).
+    ///
+    /// One 64 B-aligned buffer of `cap_msgs × 64` bytes is registered once
+    /// at `create()` via `register_buffers`, pinning its pages so the kernel
+    /// skips per-op `get_user_pages`. Each `write_batch` packs the batch into
+    /// that buffer and submits a single `WriteFixed` op (`buf_index = 0`),
+    /// so at a fixed batch size this issues exactly one op per batch — the
+    /// same syscall cadence as `StdWriter`, isolating the registered-buffer
+    /// effect. Batches larger than `cap_msgs` are chunked.
+    pub struct UringFixedWriter {
+        ring: IoUring,
+        file: File,
+        offset: u64,
+        buf: Box<[u8]>,
+        cap_msgs: usize,
+    }
+
+    impl UringFixedWriter {
+        pub fn create(path: impl AsRef<Path>, cap_msgs: usize) -> std::io::Result<Self> {
+            assert!(cap_msgs > 0, "cap_msgs must be > 0");
+            let file = OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(false)
+                .open(path)?;
+            // Ring depth 8: only one op is in flight per batch here, but a
+            // little headroom is harmless.
+            let ring = IoUring::new(8)?;
+            let mut buf = vec![0u8; cap_msgs * 64].into_boxed_slice();
+
+            let iov = libc::iovec {
+                iov_base: buf.as_mut_ptr() as *mut libc::c_void,
+                iov_len: buf.len(),
+            };
+            // SAFETY: `buf` lives as long as `self` (both are fields), is
+            // heap-allocated so its address is stable, and is never
+            // reallocated. The registered iovec therefore stays valid for
+            // the lifetime of the ring.
+            unsafe {
+                ring.submitter().register_buffers(&[iov])?;
+            }
+
+            Ok(Self { ring, file, offset: 0, buf, cap_msgs })
+        }
+    }
+
+    impl MessageWriter for UringFixedWriter {
+        fn write_batch(&mut self, msgs: &[Message]) -> std::io::Result<usize> {
+            let mut written = 0usize;
+
+            for chunk in msgs.chunks(self.cap_msgs) {
+                // Pack the chunk contiguously into the registered buffer.
+                for (i, m) in chunk.iter().enumerate() {
+                    self.buf[i * 64..(i + 1) * 64].copy_from_slice(&m.to_bytes());
+                }
+
+                let len = (chunk.len() * 64) as u32;
+                let fd = self.file.as_raw_fd();
+                let off = self.offset;
+                let ptr = self.buf.as_ptr();
+
+                // SAFETY: `ptr` points into the registered buffer (index 0),
+                // which outlives this op; `len` ≤ the registered length; the
+                // submission queue has capacity for one entry.
+                unsafe {
+                    let op = opcode::WriteFixed::new(types::Fd(fd), ptr, len, 0)
+                        .offset(off)
+                        .build()
+                        .user_data(0);
+                    let mut sq = self.ring.submission();
+                    sq.push(&op).expect("ring submission full");
+                }
+
+                self.ring.submit_and_wait(1)?;
+
+                for cqe in self.ring.completion() {
+                    let ret = cqe.result();
+                    if ret < 0 {
+                        return Err(std::io::Error::from_raw_os_error(-ret));
+                    }
+                }
+
+                self.offset += len as u64;
+                written += chunk.len();
+            }
+
+            Ok(written)
+        }
+
+        fn sync(&mut self) -> std::io::Result<()> {
+            self.file.sync_data()
+        }
+
+        fn name(&self) -> &'static str { "io_uring-WriteFixed" }
+    }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -203,6 +307,19 @@ mod tests {
         // Create file first so UringWriter can open it
         std::fs::File::create(path).unwrap();
         let mut w = uring::UringWriter::create(path, 16).unwrap();
+        roundtrip_file(&mut w, path);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn uring_fixed_writer_roundtrip() {
+        let path = "test_uring_fixed_log.bin";
+        let _ = std::fs::remove_file(path);
+        std::fs::File::create(path).unwrap();
+        // cap_msgs = 4 forces the chunking path (8 msgs → two chunks),
+        // exercising offset advance across ops.
+        let mut w = uring::UringFixedWriter::create(path, 4).unwrap();
         roundtrip_file(&mut w, path);
         std::fs::remove_file(path).unwrap();
     }
