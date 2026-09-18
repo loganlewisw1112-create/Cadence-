@@ -36,6 +36,28 @@ The benchmark takes ~3 minutes. Output:
 | 4b | std I/O baseline (Windows); io_uring impl for Linux | ✅ |
 | 5 | Reproducible artifacts, architecture docs, full README | ✅ |
 
+## Verification status
+
+Two performance claims in this README are held to a higher bar than the rest and tracked
+separately, via a committed, runnable harness ([`VERIFICATION_PLAN.md`](VERIFICATION_PLAN.md)
++ [`VERIFICATION_RUNBOOK.md`](VERIFICATION_RUNBOOK.md), binaries `tail_bench` and
+`persist_verify`). Current state (2026-09-17):
+
+| Item | Status |
+|---|---|
+| `cargo test --all` | ✅ green on Windows **and** Linux |
+| io_uring code compiles (`io-uring 0.6.4`) | ✅ verified on Linux (WSL2, kernel 6.6) |
+| io_uring round-trip correctness (`Write` + `WriteFixed`) | ✅ verified on Linux |
+| **T — sub-µs p99 tail latency** | ⏳ **projected, not measured** — needs bare-metal Linux + `isolcpus` (a VM/WSL scheduler cannot produce a valid p99) |
+| **D — io_uring registered buffers ≥ 1.5× std** | ⏳ **cited, not measured** — needs a real disclosed block device |
+
+**Directional-only note (not a verdict):** on a virtualized WSL2 ext4 VHD (no `drop_caches`,
+no `O_DIRECT`, small counts), `UringFixedWriter` did **not** reach 1.5× over `StdWriter`
+(best ~1.14×), though it beat the naive `UringWriter` by ~2–4× — confirming registered
+buffers are the real lever, without confirming the headline ratio. The ≥1.5× claim stays
+*cited, not measured* until a bare-metal, disclosed-device run per the runbook. No
+verification result JSONs are committed yet, by design.
+
 ---
 
 ## Benchmark results
@@ -43,7 +65,7 @@ The benchmark takes ~3 minutes. Output:
 **Hardware:** Windows 11, x86_64, 12 logical cores (6P + HT), release build, no kernel isolation.  
 **Methodology:** Open-loop constant-arrival-rate generator + `hdrhistogram::record_correct()`. See [`BENCHMARKING.md`](BENCHMARKING.md) for the full coordinated-omission rationale.
 
-> Tail latency (p99+) is dominated by OS scheduler jitter on Windows without `isolcpus`. The minimum latency is the hardware floor and is scheduler-independent. Running on Linux with isolated cores would show sub-µs p99.
+> Tail latency (p99+) is dominated by OS scheduler jitter on Windows without `isolcpus`. The minimum latency is the hardware floor and is scheduler-independent. Running on Linux with isolated cores would show sub-µs p99 — **projected, not yet measured.** A runnable verification harness (`tail_bench`) now exists to test this on bare-metal isolated cores; see [Verification status](#verification-status) and [`VERIFICATION_RUNBOOK.md`](VERIFICATION_RUNBOOK.md).
 
 ### Latency — open-loop at 10,000 msg/s, CO-corrected
 
@@ -270,7 +292,7 @@ These require hardware or OS configuration not available on a single Windows dev
 
 **MPSC ring buffer** — replace the head cursor with a fetch-add atomic and a two-phase commit. This is how LMAX Disruptor's multi-producer sequencer works. Requires `loom` testing.
 
-**Persistent log (Phase 4b — partially implemented)** — the `persist` crate has `StdWriter` (BufWriter + sync_data) and `UringWriter` (io_uring batched writes, Linux only) behind a common `MessageWriter` trait.
+**Persistent log (Phase 4b — partially implemented)** — the `persist` crate has `StdWriter` (BufWriter + sync_data), `UringWriter` (naive io_uring `Write`, Linux only), and `UringFixedWriter` (io_uring `WriteFixed` with registered buffers, Linux only) behind a common `MessageWriter` trait.
 
 | Batch size | StdWriter (Windows) |
 |---|---|
@@ -278,7 +300,7 @@ These require hardware or OS configuration not available on a single Windows dev
 | 8 | 0.14–0.41 Mmsg/s |
 | 64–4096 | ~0.34–0.36 Mmsg/s |
 
-io_uring with registered buffers on Linux is expected to reach ~1.5–2.5× over the std baseline at large batch sizes. Numbers cited from published benchmarks — not measured on this hardware.
+io_uring with registered buffers on Linux is *cited* from published benchmarks at ~1.5–2.5× over the std baseline at large batch sizes — **not yet measured on real hardware.** See [Verification status](#verification-status) for what has and hasn't been proven.
 
 **Cross-process IPC** — shared-memory ring buffer mapped into two processes, POSIX named shared memory. See [Iceoryx](https://github.com/eclipse-iceoryx/iceoryx).
 

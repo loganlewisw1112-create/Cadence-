@@ -11,6 +11,14 @@ path = "src/main.rs"
 name = "persist_bench"
 path = "src/persist_bench.rs"
 
+[[bin]]
+name = "tail_bench"
+path = "src/tail_bench.rs"
+
+[[bin]]
+name = "persist_verify"
+path = "src/persist_verify.rs"
+
 
 [dependencies]
 bus = { path = "../bus" }
