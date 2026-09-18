@@ -11,16 +11,29 @@ Everything from "Next action" down is yours and is never auto-edited. -->
 
 ## Blocker
 
-UNKNOWN — no commit signals a blocker. Fill in, or write `none`.
+Bare-metal Linux hardware. The two headline claims (sub-µs p99; io_uring ≥1.5×) can
+only be measured on a dedicated box — Test T needs `isolcpus` boot config, Test D needs
+a real disclosed block device. WSL2/VMs cannot produce either (virtualized).
 
 ## Next action
 
-UNKNOWN — one concrete sentence. What would you actually do first?
+On a dedicated Linux box, follow `VERIFICATION_RUNBOOK.md`: build, `cargo test --all`,
+then run `tail_bench` (Test T) and `persist_verify` (Test D), commit the result JSONs,
+and update the README claims per the pass/fail tables.
 
 ## Open question
 
-UNKNOWN — what do you not yet know that decides the next move?
+Does io_uring `WriteFixed` actually clear 1.5× std on real hardware in Mode B
+(sync-per-batch)? Directional WSL run said no (~1.14×, virtualized) — unproven either way
+until a real block device run.
 
 ## Carry forward
 
-_Anything the git history does not say. Never auto-edited._
+Verification harness is **code-complete and correctness-proven**, not claim-proven:
+- Branch `verification` (unmerged) carries `tail_bench.rs`, `persist_verify.rs`, the
+  io_uring `UringWriter`/`UringFixedWriter` in `persist/src/lib.rs`, and `run_verification.sh`.
+- 2026-09-17: io_uring code **compiles** (`io-uring 0.6.4`) and **round-trips correctly**
+  on Linux (WSL2 kernel 6.6) — retired the "never compiled" caveat. `cargo test --all`
+  green on Windows + Linux.
+- No headline numbers exist yet; result JSONs are intentionally uncommitted until a real
+  hardware run. See `VERIFICATION_RUNBOOK.md`.
