@@ -2,3 +2,9 @@
 Cargo.lock
 # bench output committed explicitly when results are stable
 # bench_results.json
+
+# secrets / local env — never commit
+.env
+.env.*
+!.env.example
+!.env.sample
